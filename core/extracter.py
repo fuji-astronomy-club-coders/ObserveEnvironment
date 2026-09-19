@@ -1,3 +1,5 @@
+import re
+from datetime import datetime
 from pathlib import Path
 
 from utils import loadCsv2dList, save2dListCsv
@@ -56,6 +58,49 @@ def savemetadata(metadata: dict, output: Path) -> None:
     print("table", table)
     save2dListCsv(table, output)
 
+def is_valid_capobj_filename(
+    filename: str, 
+    cap_objs: list[str] = ["CapObj"], 
+    exts: list[str] = ["ser", "AVI", "jpg", "tiff"]
+) -> bool:
+    """
+    天体撮影メタデータファイルの命名形式に適合しているかを判定する。
+    想定フォーマット: YYYY-MM-DD-hhmm_frame-CapObj.ext.txt
+    
+    :param filename: 判定対象のファイル名（パスが含まれていてもファイル名部分を取り出して判定）
+    :param cap_objs: CapObj部分の許容文字列リスト
+    :param exts: 拡張子（ser, AVI等）の許容文字列リスト
+    :return: 形式に適合していればTrue、さもなければFalse
+    """
+    # パスが含まれている場合はファイル名のみを取得
+    filename_only = filename.split("/")[-1].split("\\")[-1]
+    
+    # 特殊文字のエスケープ処理とOR条件の構築
+    escaped_objs = [re.escape(obj) for obj in cap_objs]
+    escaped_exts = [re.escape(ext) for ext in exts]
+    
+    objs_pattern = "|".join(escaped_objs)
+    exts_pattern = "|".join(escaped_exts)
+    
+    # 正規表現パターンの作成
+    # 1. YYYY-MM-DD-hhmm (日付・時刻)
+    # 2. _([0-9]+) (フレーム番号等の数字)
+    # 3. -(CapObj) (キャプチャオブジェクト指定)
+    # 4. .(ext).txt (拡張子および固定の.txt)
+    pattern = rf"^(\d{{4}}-\d{{2}}-\d{{2}}-\d{{4}})_(\d+)-({objs_pattern})\.({exts_pattern})\.txt$"
+    
+    match = re.match(pattern, filename_only, re.IGNORECASE)
+    if not match:
+        return False
+    
+    # 日時部分を取り出して実在する日時か検証（例: 2月30日などを除外）
+    dt_str = match.group(1)
+    try:
+        datetime.strptime(dt_str, "%Y-%m-%d-%H%M")
+    except ValueError:
+        return False
+        
+    return True
 
 if "__main__" == __name__:
     filepath = Path(r"samples/01-17-LTsertext/2026-01-17-0203_9-CapObj.ser.txt")
