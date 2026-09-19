@@ -102,7 +102,36 @@ def is_valid_capobj_filename(
         
     return True
 
+def compile_daily_metadata(
+    folder_path: Path, 
+    output_csv: Path, 
+    cap_objs: list[str] = ["CapObj"], 
+    exts: list[str] = ["ser", "AVI", "jpg", "tiff"]
+) -> None:
+    """
+    指定されたフォルダ内の撮影メタデータファイル(.txt)をすべて読み込み、
+    一つのCSVファイルにまとめます。
+    
+    :param folder_path: メタデータファイルが格納されている1日分のフォルダのパス
+    :param output_csv: 出力するCSVファイルのパス
+    :param cap_objs: CapObj部分の許容文字列リスト
+    :param exts: 拡張子（ser, AVI等）の許容文字列リスト
+    """
+    if not folder_path.exists() or not folder_path.is_dir():
+        print(f"ディレクトリが存在しないか、無効なパスです: {folder_path}")
+        return
+
+    # フォルダ内のすべての.txtファイルを取得
+    for file_path in folder_path.glob("*.txt"):
+        if is_valid_capobj_filename(file_path.name, cap_objs, exts):
+            cr_metadata = extractmetadata(file_path)
+            
+            cr_metadata["OriginalFilename"] = file_path.name
+            
+            savemetadata(cr_metadata, output_csv)
+            
 if "__main__" == __name__:
+    # 既存の単一ファイル処理のテスト
     filepath = Path(r"samples/01-17-LTsertext/2026-01-17-0203_9-CapObj.ser.txt")
     from pprint import pprint
 
@@ -113,3 +142,9 @@ if "__main__" == __name__:
     outputdir = Path("samples") / "result" / "metadata"
     outputdir.mkdir(parents=True, exist_ok=True)
     savemetadata(cr_metadata, outputdir / outfilename)
+
+    from tkinter.filedialog import askdirectory
+    # 追加した一括処理のテスト
+    target_folder = Path(askdirectory())
+    daily_csv_output = outputdir / "2026-01-17_daily_metadata.csv"
+    compile_daily_metadata(target_folder, daily_csv_output)
