@@ -1,0 +1,2 @@
+ID,Auto Exp Max Exp,Auto Exp Max Gain,Auto Exp Target Brightness,Bin,Brightness,Capture Area Size,Capture Limit,Colour Format,Debayer Type,EndCapture,Exposure,Flip,FrameCount,Gain,Hardware Bin,High Speed Mode,Output Format,StartCapture,StartX,StartY,Temperature,TimeZone,Timestamp Frames,USB Limit,USB Port
+1,30000ms,310,75,1,1,1608 * 1104,1000 frames,RAW16,NONE,2026-01-17T11:04:10.605Z,927us,None,1000,12,OFF,OFF,*.SER,2026-01-17T11:03:59.167Z,0,0,32.9 C,+9,OFF,80,3.0
