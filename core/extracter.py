@@ -124,13 +124,15 @@ def compile_daily_metadata(
     # フォルダ内のすべての.txtファイルを取得
     for file_path in folder_path.glob("*.txt"):
         if is_valid_capobj_filename(file_path.name, cap_objs, exts):
-            cr_metadata = extractmetadata(file_path)
+            cr_metadata={}
             
-            cr_metadata["OriginalFilename"] = file_path.name
+            cr_metadata.update({"OriginalFilename":file_path.name,"":""})
+            cr_metadata.update(extractmetadata(file_path))
             
             savemetadata(cr_metadata, output_csv)
             
 if "__main__" == __name__:
+    """   
     # 既存の単一ファイル処理のテスト
     filepath = Path(r"samples/01-17-LTsertext/2026-01-17-0203_9-CapObj.ser.txt")
     from pprint import pprint
@@ -142,9 +144,9 @@ if "__main__" == __name__:
     outputdir = Path("samples") / "result" / "metadata"
     outputdir.mkdir(parents=True, exist_ok=True)
     savemetadata(cr_metadata, outputdir / outfilename)
-
+    """
     from tkinter.filedialog import askdirectory
     # 追加した一括処理のテスト
-    target_folder = Path(askdirectory())
-    daily_csv_output = outputdir / "2026-01-17_daily_metadata.csv"
+    target_folder = Path(askdirectory()).absolute()
+    daily_csv_output = target_folder / f"{target_folder}_daily_metadata.csv"
     compile_daily_metadata(target_folder, daily_csv_output)
