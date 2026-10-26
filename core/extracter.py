@@ -1,152 +1,304 @@
+"""ASI の撮影メタデータを再帰的に収集し、CSV にまとめるモジュール。"""
+
+from __future__ import annotations
+
+import logging
 import re
 from datetime import datetime
 from pathlib import Path
+from typing import Sequence
 
 from utils import loadCsv2dList, save2dListCsv
 
+LOGGER = logging.getLogger(__name__)
+DEFAULT_CAP_OBJS = ("CapObj",)
+DEFAULT_EXTS = ("ser", "AVI", "jpg", "tiff")
 
-def extractmetadata(path: Path) -> dict:
+
+def extractmetadata(path: Path) -> dict[str, str]:
+    """ASI が作成するテキストファイルからメタデータを抽出する。
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        読み込むメタデータファイル。
+
+    Returns
+    -------
+    dict[str, str]
+        ``key=value`` 形式の行から抽出したメタデータ。
     """
-    asiの作成するtxtファイルからメタデータをdict形式で抽出します
-    """
-    with open(str(path), "r", encoding="utf-8") as f:
-        lines = f.readlines()
+    extracted_metadata: dict[str, str] = {}
+    with path.open("r", encoding="utf-8-sig") as file:
+        for line_number, line in enumerate(file, start=1):
+            if "=" not in line:
+                if line.strip():
+                    LOGGER.warning("区切り文字 '=' がない行をスキップします: %s:%d", path, line_number)
+                continue
 
-    extracted_metadata = {}
-
-    for i, line in enumerate(lines):
-        if "=" not in line:
-            print(f"無効な行としてskipします L{i}: {line}")
-        else:
-            item, value = line.split("=")
-            extracted_metadata[item.strip()] = value.strip()
+            item, value = line.split("=", maxsplit=1)
+            item = item.strip()
+            if not item:
+                LOGGER.warning("キーが空の行をスキップします: %s:%d", path, line_number)
+                continue
+            extracted_metadata[item] = value.strip()
 
     return extracted_metadata
 
 
-def savemetadata(metadata: dict, output: Path) -> None:
+def savemetadata(metadata: dict[str, object], output: Path) -> None:
+    """既存 CSV にメタデータを 1 レコード追加する。
+
+    既存レコードに存在しない列が追加された場合も、既存行の値を保持しつつ
+    新しい列を空欄で補完する。
+
+    Parameters
+    ----------
+    metadata : dict[str, object]
+        追加するメタデータ。
+    output : pathlib.Path
+        出力 CSV のパス。
     """
-    既存または新しいcsvにメタデータを書き込みます
-    """
-    clm, lin = 1, 0
-    transed_data = [[]]
-    exs_headers = ["ID"]
+    existing: list[list[object]] = []
     if output.exists() and output.is_file():
         existing = loadCsv2dList(output)
-        if existing:
-            exs_headers = existing[0]
-            clm = len(exs_headers)
-            exs_data = existing[1:]
-            lin = len(exs_data)
-            transed_data = [list(row) for row in zip(*exs_data)]
 
-    metadata["ID"] = lin + 1
+    if existing:
+        old_headers = [str(header) for header in existing[0]]
+        old_rows = existing[1:]
+    else:
+        old_headers = ["ID"]
+        old_rows = []
 
-    new_headers = [k for k in metadata.keys() if k not in exs_headers]
-    headers = exs_headers + list(new_headers)
+    record = dict(metadata)
+    record["ID"] = len(old_rows) + 1
 
-    print("header", headers)
-    new_clms = [[""] * lin for _ in range(len(headers) - clm)]
-    data = transed_data + new_clms
-    for i, h in enumerate(headers):
-        val = metadata.get(h, "")
-        print("val", val)
-        data[i].append(val)
+    headers = list(old_headers)
+    for key in record:
+        if key not in headers:
+            headers.append(key)
 
-    print("data", data)
-    table = [headers] + [list(row) for row in zip(*data)]
-    print("table", table)
-    save2dListCsv(table, output)
+    rows: list[list[object]] = []
+    for old_row in old_rows:
+        old_record = dict(zip(old_headers, old_row))
+        rows.append([old_record.get(header, "") for header in headers])
+    rows.append([record.get(header, "") for header in headers])
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    save2dListCsv([headers, *rows], output)
+    LOGGER.info("CSV にレコードを追加しました: %s (ID=%s)", output, record["ID"])
+
 
 def is_valid_capobj_filename(
-    filename: str, 
-    cap_objs: list[str] = ["CapObj"], 
-    exts: list[str] = ["ser", "AVI", "jpg", "tiff"]
+    filename: str,
+    cap_objs: Sequence[str] = DEFAULT_CAP_OBJS,
+    exts: Sequence[str] = DEFAULT_EXTS,
 ) -> bool:
+    """天体撮影メタデータファイルの命名形式と日時を検証する。
+
+    想定形式は ``YYYY-MM-DD-hhmm_frame-CapObj.ext.txt``。
+
+    Parameters
+    ----------
+    filename : str
+        判定対象のファイル名またはパス。
+    cap_objs : Sequence[str], default ("CapObj",)
+        ``CapObj`` 部分に許容する文字列。
+    exts : Sequence[str], default ("ser", "AVI", "jpg", "tiff")
+        撮影データ部分に許容する拡張子。
+
+    Returns
+    -------
+    bool
+        ファイル名と日時が形式に適合する場合は ``True``。
     """
-    天体撮影メタデータファイルの命名形式に適合しているかを判定する。
-    想定フォーマット: YYYY-MM-DD-hhmm_frame-CapObj.ext.txt
-    
-    :param filename: 判定対象のファイル名（パスが含まれていてもファイル名部分を取り出して判定）
-    :param cap_objs: CapObj部分の許容文字列リスト
-    :param exts: 拡張子（ser, AVI等）の許容文字列リスト
-    :return: 形式に適合していればTrue、さもなければFalse
-    """
-    # パスが含まれている場合はファイル名のみを取得
-    filename_only = filename.split("/")[-1].split("\\")[-1]
-    
-    # 特殊文字のエスケープ処理とOR条件の構築
-    escaped_objs = [re.escape(obj) for obj in cap_objs]
-    escaped_exts = [re.escape(ext) for ext in exts]
-    
-    objs_pattern = "|".join(escaped_objs)
-    exts_pattern = "|".join(escaped_exts)
-    
-    # 正規表現パターンの作成
-    # 1. YYYY-MM-DD-hhmm (日付・時刻)
-    # 2. _([0-9]+) (フレーム番号等の数字)
-    # 3. -(CapObj) (キャプチャオブジェクト指定)
-    # 4. .(ext).txt (拡張子および固定の.txt)
-    pattern = rf"^(\d{{4}}-\d{{2}}-\d{{2}}-\d{{4}})_(\d+)-({objs_pattern})\.({exts_pattern})\.txt$"
-    
+    # Windows パスが POSIX 環境から渡された場合もファイル名を正しく抽出する。
+    filename_only = filename.replace("\\", "/").rsplit("/", maxsplit=1)[-1]
+    if not cap_objs or not exts:
+        return False
+
+    escaped_objs = "|".join(re.escape(obj) for obj in cap_objs)
+    escaped_exts = "|".join(re.escape(ext) for ext in exts)
+    pattern = (
+        rf"^(\d{{4}}-\d{{2}}-\d{{2}}-\d{{4}})_"
+        rf"(\d+)-({escaped_objs})\.({escaped_exts})\.txt$"
+    )
     match = re.match(pattern, filename_only, re.IGNORECASE)
     if not match:
         return False
-    
-    # 日時部分を取り出して実在する日時か検証（例: 2月30日などを除外）
-    dt_str = match.group(1)
+
     try:
-        datetime.strptime(dt_str, "%Y-%m-%d-%H%M")
+        datetime.strptime(match.group(1), "%Y-%m-%d-%H%M")
     except ValueError:
         return False
-        
     return True
 
+
 def compile_daily_metadata(
-    folder_path: Path, 
-    output_csv: Path, 
-    cap_objs: list[str] = ["CapObj"], 
-    exts: list[str] = ["ser", "AVI", "jpg", "tiff"]
+    folder_path: Path,
+    output_csv: Path,
+    cap_objs: Sequence[str] = DEFAULT_CAP_OBJS,
+    exts: Sequence[str] = DEFAULT_EXTS,
+    validate_filename: bool = True,
 ) -> None:
+    """選択フォルダとすべてのサブフォルダのメタデータを CSV に集約する。
+
+    ``.txt`` ファイルを再帰的に検索する。``validate_filename`` が真なら
+    命名規則に合致するファイルのみ、偽ならファイル名を問わず解析する。
+    処理状況と失敗内容はロガーへ出力する。
+
+    Parameters
+    ----------
+    folder_path : pathlib.Path
+        検索対象のルートフォルダ。
+    output_csv : pathlib.Path
+        集約結果を保存する CSV のパス。
+    cap_objs : Sequence[str], default ("CapObj",)
+        ファイル名の ``CapObj`` 部分に許容する文字列。
+    exts : Sequence[str], default ("ser", "AVI", "jpg", "tiff")
+        ファイル名に許容する撮影データの拡張子。
+    validate_filename : bool, default True
+        真の場合は従来の命名規則による検証を行う。偽の場合は
+        ファイル名の形式に関係なく、すべての ``.txt`` を解析する。
     """
-    指定されたフォルダ内の撮影メタデータファイル(.txt)をすべて読み込み、
-    一つのCSVファイルにまとめます。
-    
-    :param folder_path: メタデータファイルが格納されている1日分のフォルダのパス
-    :param output_csv: 出力するCSVファイルのパス
-    :param cap_objs: CapObj部分の許容文字列リスト
-    :param exts: 拡張子（ser, AVI等）の許容文字列リスト
-    """
-    if not folder_path.exists() or not folder_path.is_dir():
-        print(f"ディレクトリが存在しないか、無効なパスです: {folder_path}")
+    folder_path = folder_path.expanduser().resolve()
+    output_csv = output_csv.expanduser().resolve()
+
+    if not folder_path.is_dir():
+        LOGGER.error("ディレクトリが存在しないか、無効なパスです: %s", folder_path)
         return
 
-    # フォルダ内のすべての.txtファイルを取得
-    for file_path in folder_path.glob("*.txt"):
-        if is_valid_capobj_filename(file_path.name, cap_objs, exts):
-            cr_metadata={}
-            
-            cr_metadata.update({"OriginalFilename":file_path.name,"":""})
-            cr_metadata.update(extractmetadata(file_path))
-            
-            savemetadata(cr_metadata, output_csv)
-            
-if "__main__" == __name__:
-    """   
-    # 既存の単一ファイル処理のテスト
-    filepath = Path(r"samples/01-17-LTsertext/2026-01-17-0203_9-CapObj.ser.txt")
-    from pprint import pprint
+    LOGGER.info("メタデータの検索を開始します: %s", folder_path)
+    LOGGER.info(
+        "ファイル名の命名規則チェック: %s",
+        "有効" if validate_filename else "無効（すべての TXT を解析）",
+    )
+    LOGGER.info("出力先 CSV: %s", output_csv)
 
-    cr_metadata = extractmetadata(filepath)
-    pprint(cr_metadata)
+    files_seen = 0
+    matched = 0
+    processed = 0
+    failed = 0
 
-    outfilename = str(filepath.name.split(".", 1)[0]) + ".csv"
-    outputdir = Path("samples") / "result" / "metadata"
-    outputdir.mkdir(parents=True, exist_ok=True)
-    savemetadata(cr_metadata, outputdir / outfilename)
+    # rglob により、選択フォルダ直下だけでなくサブフォルダも再帰的に検索する。
+    # suffix を使うことで .TXT など大文字拡張子も対象にする。
+    for file_path in sorted(folder_path.rglob("*")):
+        if not file_path.is_file() or file_path.suffix.casefold() != ".txt":
+            continue
+
+        files_seen += 1
+        if validate_filename and not is_valid_capobj_filename(
+            file_path.name, cap_objs, exts
+        ):
+            LOGGER.debug("命名形式が一致しないためスキップします: %s", file_path)
+            continue
+
+        matched += 1
+        LOGGER.info("処理中: %s", file_path)
+        try:
+            metadata: dict[str, object] = {
+                "OriginalFilename": file_path.name,
+                "OriginalPath": str(file_path.relative_to(folder_path)),
+            }
+            metadata.update(extractmetadata(file_path))
+            savemetadata(metadata, output_csv)
+            processed += 1
+        except Exception as exc:
+            failed += 1
+            LOGGER.exception("ファイルの処理に失敗しました: %s (%s)", file_path, exc)
+
+    LOGGER.info(
+        "処理終了: txt=%d, 命名一致=%d, 成功=%d, 失敗=%d, スキップ=%d",
+        files_seen,
+        matched,
+        processed,
+        failed,
+        files_seen - matched,
+    )
+    if matched == 0:
+        if validate_filename:
+            LOGGER.warning("命名規則に一致するメタデータファイルが見つかりませんでした。")
+        else:
+            LOGGER.warning("解析対象の TXT ファイルが見つかりませんでした。")
+
+
+def configure_logging(log_path: Path) -> None:
+    """コンソールと UTF-8 ログファイルへログを出力する。
+
+    Parameters
+    ----------
+    log_path : pathlib.Path
+        ログファイルの保存先。
     """
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        handlers=[
+            logging.FileHandler(log_path, encoding="utf-8"),
+            logging.StreamHandler(),
+        ],
+        force=True,
+    )
+
+
+def main() -> int:
+    """フォルダ選択ダイアログを表示し、メタデータ集約を実行する。
+
+    Returns
+    -------
+    int
+        正常終了時は 0、フォルダ選択キャンセル時は 1。
+    """
+    import tkinter as tk
+    from tkinter import messagebox
     from tkinter.filedialog import askdirectory
-    # 追加した一括処理のテスト
-    target_folder = Path(askdirectory()).absolute()
-    daily_csv_output = target_folder / f"{target_folder}_daily_metadata.csv"
-    compile_daily_metadata(target_folder, daily_csv_output)
+
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        selected_folder = askdirectory(parent=root, title="メタデータを検索するフォルダを選択")
+    finally:
+        root.destroy()
+
+    # キャンセル時にカレントディレクトリを誤って再帰処理しない。
+    if not selected_folder:
+        print("フォルダ選択がキャンセルされました。")
+        return 1
+
+    target_folder = Path(selected_folder).expanduser().resolve()
+    # はい: 命名規則を適用、いいえ: 全 TXT を解析、キャンセル: 終了。
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        filename_filter = messagebox.askyesnocancel(
+            title="ファイル名の検証",
+            message=(
+                "ファイル名の命名規則を適用しますか？\n\n"
+                "はい：従来の命名規則に一致する TXT のみ解析\n"
+                "いいえ：ファイル名を問わず、すべての TXT を解析\n"
+                "キャンセル：処理を終了"
+            ),
+            parent=root,
+        )
+    finally:
+        root.destroy()
+
+    if filename_filter is None:
+        print("処理がキャンセルされました。")
+        return 1
+
+    configure_logging(target_folder / "extracter.log")
+    output_name = f"{target_folder.name or 'metadata'}_daily_metadata.csv"
+    daily_csv_output = target_folder / output_name
+    LOGGER.info("選択フォルダ: %s", target_folder)
+    compile_daily_metadata(
+        target_folder,
+        daily_csv_output,
+        validate_filename=filename_filter,
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
